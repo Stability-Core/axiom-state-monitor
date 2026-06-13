@@ -1,3 +1,4 @@
 [workspace]
 members = ["contracts/axiom-state-monitor"]
 resolver = "2"
+

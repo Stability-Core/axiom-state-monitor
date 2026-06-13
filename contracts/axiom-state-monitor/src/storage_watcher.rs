@@ -1,9 +1,14 @@
-//! Storage Watcher — queries `live_until_ledger_seq` and classifies entry state.
+//! Storage Watcher — classifies entry lifecycle state from a known `live_until` value.
+#![deny(missing_docs)]
 
-use soroban_sdk::{Env, Symbol};
+use soroban_sdk::Env;
 use crate::types::EntryState;
 
-/// Queries Persistent storage TTL and classifies the lifecycle state.
+/// Classifies Persistent storage entries based on their recorded expiry ledger.
+///
+/// In soroban-sdk 20.x the host does not expose per-entry TTL to contracts, so
+/// this module works against `live_until_ledger_seq` values that are tracked
+/// by the contract's internal registry (`WATCHED_KEY` map in `lib.rs`).
 pub struct StorageWatcher<'a> {
     env: &'a Env,
 }
@@ -14,22 +19,21 @@ impl<'a> StorageWatcher<'a> {
         Self { env }
     }
 
-    /// Returns the number of ledgers remaining until the entry is archived.
-    /// Returns `None` if the entry does not exist (Dead state).
-    pub fn get_ttl(&self, key: &Symbol) -> Option<u32> {
+    /// Classify an entry given its absolute `live_until_ledger_seq` and the
+    /// configured warning threshold (in ledgers).
+    ///
+    /// | Remaining TTL          | State     |
+    /// |------------------------|-----------|
+    /// | `0` (expired)          | Archived  |
+    /// | `> 0` and `≤ threshold`| Warning   |
+    /// | `> threshold`          | Live      |
+    pub fn classify(&self, live_until: u32, threshold: u32) -> EntryState {
         let current = self.env.ledger().sequence();
-        // get_ttl returns the live_until_ledger_seq for Persistent entries
-        let live_until = self.env.storage().persistent().get_ttl(key)?;
-        Some(live_until.saturating_sub(current))
-    }
-
-    /// Classify the entry into its lifecycle state given a warning threshold.
-    pub fn classify(&self, key: &Symbol, threshold: u32) -> EntryState {
-        match self.get_ttl(key) {
-            None => EntryState::Dead,
-            Some(0) => EntryState::Archived,
-            Some(ttl) if ttl <= threshold => EntryState::Warning,
-            Some(_) => EntryState::Live,
+        let remaining = live_until.saturating_sub(current);
+        match remaining {
+            0 => EntryState::Archived,
+            r if r <= threshold => EntryState::Warning,
+            _ => EntryState::Live,
         }
     }
 }
